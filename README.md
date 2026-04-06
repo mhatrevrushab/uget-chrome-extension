@@ -22,7 +22,7 @@ This extension requires **[uget-integrator](https://github.com/ugetdm/uget-integ
 
 ## Installation
 
-### From Source (Developer Mode)
+### From Source
 
 1. Clone this repository:
 
@@ -32,6 +32,12 @@ This extension requires **[uget-integrator](https://github.com/ugetdm/uget-integ
 2. Open `chrome://extensions/` in Chrome.
 3. Enable **Developer mode** (toggle in the top-right corner).
 4. Click **Load unpacked** and select the `extension/` directory from the cloned repo.
+
+### **From Release**
+
+1. Download the `uget-chrome-extension.zip` from the GitHub Releases page.
+2. Extract the zip.
+3. Open `chrome://extensions/`, enable **Developer mode**, and click **Load unpacked** on the extracted `extension/` folder.
 
 ## Features
 
