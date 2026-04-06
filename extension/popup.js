@@ -1,108 +1,96 @@
 /*
- * uget-chrome-wrapper is an extension to integrate uGet Download manager
- * with Google Chrome, Chromium, Vivaldi and Opera in Linux and Windows.
+ * uGet Integration popup script.
+ * Communicates with the service worker via chrome.runtime.sendMessage().
  *
  * Copyright (C) 2016  Gobinath
+ * Copyright (C) 2025  shravan
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-var current_browser;
+document.addEventListener('DOMContentLoaded', () => {
 
-try {
-    current_browser = browser;
-    current_browser.runtime.getBrowserInfo().then(
-        function(info) {
-            if (info.name === 'Firefox') {
-                // Do nothing
-            }
-        }
-    );
-} catch (ex) {
-    // Not Firefox
-    current_browser = chrome;
-}
+    // ---- DOM references ----
+    const infoEl = document.getElementById('info');
+    const warnEl = document.getElementById('warn');
+    const errorEl = document.getElementById('error');
+    const chkEnable = document.getElementById('chk_enable');
+    const fileSizeEl = document.getElementById('fileSize');
+    const urlsToExcludeEl = document.getElementById('urlsToExclude');
+    const urlsToIncludeEl = document.getElementById('urlsToInclude');
+    const mimeToExcludeEl = document.getElementById('mimeToExclude');
+    const mimeToIncludeEl = document.getElementById('mimeToInclude');
 
-$(document).ready(function() {
-    // Show the system status
-    current_browser.runtime.getBackgroundPage(function(backgroundPage) {
-        var state = backgroundPage.getState();
-        if (state == 0) {
-            $('#info').css('display', 'block');
-            $('#warn').css('display', 'none');
-            $('#error').css('display', 'none');
-        } else if (state == 1) {
-            $('#info').css('display', 'none');
-            $('#warn').css('display', 'block');
-            $('#error').css('display', 'none');
-        } else {
-            $('#info').css('display', 'none');
-            $('#warn').css('display', 'none');
-            $('#error').css('display', 'block');
+    // ---- Load current state from service worker ----
+    chrome.runtime.sendMessage({ action: 'getState' }, (response) => {
+        if (response) {
+            const state = response.state;
+            infoEl.style.display = state === 0 ? 'block' : 'none';
+            warnEl.style.display = state === 1 ? 'block' : 'none';
+            errorEl.style.display = state === 2 ? 'block' : 'none';
         }
     });
 
-    current_browser.storage.sync.get(function(items) {
-        $('#urlsToExclude').val(items["uget-urls-exclude"]);
-        $('#urlsToInclude').val(items["uget-urls-include"]);
-        $('#mimeToExclude').val(items["uget-mime-exclude"]);
-        $('#mimeToInclude').val(items["uget-mime-include"]);
-        $('#fileSize').val(parseInt(items["uget-min-file-size"]) / 1024);
-        $('#chk_enable').prop('checked', items["uget-interrupt"] == "true");
+    // ---- Load settings from storage ----
+    chrome.storage.sync.get(null, (items) => {
+        urlsToExcludeEl.value = items["uget-urls-exclude"] || '';
+        urlsToIncludeEl.value = items["uget-urls-include"] || '';
+        mimeToExcludeEl.value = items["uget-mime-exclude"] || '';
+        mimeToIncludeEl.value = items["uget-mime-include"] || '';
+        fileSizeEl.value = parseInt(items["uget-min-file-size"]) / 1024 || 300;
+        chkEnable.checked = (items["uget-interrupt"] === "true");
     });
 
-    // Set event listeners
-    $('#chk_enable').change(function() {
-        var enabled = this.checked;
-        current_browser.runtime.getBackgroundPage(function(backgroundPage) {
-            backgroundPage.setInterruptDownload(enabled, true);
+    // ---- Event listeners ----
+    chkEnable.addEventListener('change', () => {
+        chrome.runtime.sendMessage({
+            action: 'setInterruptDownload',
+            enabled: chkEnable.checked
         });
     });
-    $("#fileSize").on("change paste", function() {
-        var minFileSize = parseInt($(this).val());
+
+    fileSizeEl.addEventListener('change', () => {
+        let minFileSize = parseInt(fileSizeEl.value);
         if (isNaN(minFileSize)) {
             minFileSize = 300;
         } else if (minFileSize < -1) {
             minFileSize = -1;
         }
-        $('#fileSize').val(minFileSize);
-        current_browser.runtime.getBackgroundPage(function(backgroundPage) {
-            backgroundPage.updateMinFileSize(minFileSize * 1024);
+        fileSizeEl.value = minFileSize;
+        chrome.runtime.sendMessage({
+            action: 'updateMinFileSize',
+            value: minFileSize * 1024
         });
     });
-    $("#urlsToExclude").on("change paste", function() {
-        var keywords = $(this).val().trim();
-        current_browser.runtime.getBackgroundPage(function(backgroundPage) {
-            backgroundPage.updateExcludeKeywords(keywords);
+
+    urlsToExcludeEl.addEventListener('change', () => {
+        chrome.runtime.sendMessage({
+            action: 'updateExcludeKeywords',
+            value: urlsToExcludeEl.value.trim()
         });
     });
-    $("#urlsToInclude").on("change paste", function() {
-        var keywords = $(this).val().trim();
-        current_browser.runtime.getBackgroundPage(function(backgroundPage) {
-            backgroundPage.updateIncludeKeywords(keywords);
+
+    urlsToIncludeEl.addEventListener('change', () => {
+        chrome.runtime.sendMessage({
+            action: 'updateIncludeKeywords',
+            value: urlsToIncludeEl.value.trim()
         });
     });
-    $("#mimeToExclude").on("change paste", function() {
-        var keywords = $(this).val().trim();
-        current_browser.runtime.getBackgroundPage(function(backgroundPage) {
-            backgroundPage.updateExcludeMIMEs(keywords);
+
+    mimeToExcludeEl.addEventListener('change', () => {
+        chrome.runtime.sendMessage({
+            action: 'updateExcludeMIMEs',
+            value: mimeToExcludeEl.value.trim()
         });
     });
-    $("#mimeToInclude").on("change paste", function() {
-        var keywords = $(this).val().trim();
-        current_browser.runtime.getBackgroundPage(function(backgroundPage) {
-            backgroundPage.updateIncludeMIMEs(keywords);
+
+    mimeToIncludeEl.addEventListener('change', () => {
+        chrome.runtime.sendMessage({
+            action: 'updateIncludeMIMEs',
+            value: mimeToIncludeEl.value.trim()
         });
     });
 });

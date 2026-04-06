@@ -1,8 +1,9 @@
 /*
  * uGet Integration is an extension to integrate uGet Download manager
- * with Google Chrome, Chromium, Vivaldi, Opera and Mozilla Firefox in Linux and Windows.
+ * with Google Chrome, Chromium, and other Chromium-based browsers in Linux and Windows.
  *
  * Copyright (C) 2016  Gobinath
+ * Copyright (C) 2025  shravan
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,27 +19,26 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-var EXTENSION_VERSION = "2.1.3";
-var REQUIRED_INTEGRATOR_VERSION = "1.0.0";
-var MAX_FILE_SIZE = Number.MAX_SAFE_INTEGER;
-var interruptDownloads = true;
-var ugetIntegratorNotFound = true;
-var disposition = '';
-var hostName;
-var ugetIntegratorVersion;
-var ugetVersion = '';
-var chromeVersion;
-var firefoxVersion;
-var minFileSizeToInterrupt = 300 * 1024; // 300 kb
-var current_browser;
-var filter = [];
-var urlsToSkip = [];
-var urlsToInterrupt = [];
-var mimeToSkip = [];
-var mimeToInterrupt = [];
-mediasInTab = {};
-var cookies = '';
-var message = {
+const EXTENSION_VERSION = "3.0.0";
+const REQUIRED_INTEGRATOR_VERSION = "1.0.0";
+const HOST_NAME = 'com.ugetdm.chrome';
+
+// In-memory state (re-populated from storage on service worker wake-up)
+let interruptDownloads = true;
+let ugetIntegratorNotFound = true;
+let ugetIntegratorVersion = '';
+let ugetVersion = '';
+let minFileSizeToInterrupt = 300 * 1024; // 300 KB
+let urlsToSkip = [];
+let urlsToInterrupt = [];
+let mimeToSkip = [];
+let mimeToInterrupt = [];
+let mediasInTab = {};
+let disposition = '';
+let cookies = '';
+let filter = [];
+
+let message = {
     URL: '',
     Cookies: '',
     UserAgent: '',
@@ -49,327 +49,272 @@ var message = {
     Batch: false,
     Version: EXTENSION_VERSION
 };
-var requestList = [{
-    cookies: '',
-    postData: '',
-    id: ''
-}, {
-    cookies: '',
-    postData: '',
-    id: ''
-}, {
-    cookies: '',
-    postData: '',
-    id: ''
-}];
-var currRequest = 0;
 
-function start() {
-    initialize();
-    readStorage();
-    setDownloadHooks();
-    enableVideoGrabber();
-}
+// Circular buffer for recent request metadata
+let requestList = [
+    { cookies: '', postData: '', id: '', referrer: '' },
+    { cookies: '', postData: '', id: '', referrer: '' },
+    { cookies: '', postData: '', id: '', referrer: '' }
+];
+let currRequest = 0;
+
+// ===================== Initialization =====================
+
 /**
- * Initialize the variables.
+ * Load all settings from storage into in-memory variables.
+ * Must be called on every service worker start to restore state.
  */
-function initialize() {
-    // Get the running browser
-    try {
-        chromeVersion = /Chrome\/([0-9]+)/.exec(navigator.userAgent)[1];
-    } catch (ex) {
-        chromeVersion = 33;
+async function loadState() {
+    const items = await chrome.storage.sync.get(null);
+
+    if (items["uget-urls-exclude"]) {
+        urlsToSkip = items["uget-urls-exclude"].split(/[\s,]+/);
     }
-    try {
-        current_browser = browser;
-        hostName = 'com.ugetdm.firefox';
-        current_browser.runtime.getBrowserInfo().then(
-            function (info) {
-                if (info.name === 'Firefox') {
-                    // Convert version string to int
-                    firefoxVersion = parseInt(info.version.replace(/[ab]\d+/, '').split('.')[0]);
-                }
-            }
-        );
-    } catch (ex) {
-        firefoxVersion = 0;
-        current_browser = chrome;
-        hostName = 'com.ugetdm.chrome';
+    if (items["uget-urls-include"]) {
+        urlsToInterrupt = items["uget-urls-include"].split(/[\s,]+/);
     }
-    // Set keyboard shortcut listener
-    current_browser.commands.onCommand.addListener(function (command) {
-        if ("toggle-interruption" === command) {
-            // Toggle
-            setInterruptDownload(!interruptDownloads, true);
-        }
-    });
-    chromeVersion = parseInt(chromeVersion);
-    sendMessageToHost(message);
-    createContextMenus();
+    if (items["uget-mime-exclude"]) {
+        mimeToSkip = items["uget-mime-exclude"].split(/[\s,]+/);
+    }
+    if (items["uget-mime-include"]) {
+        mimeToInterrupt = items["uget-mime-include"].split(/[\s,]+/);
+    }
+    if (items["uget-min-file-size"] !== undefined) {
+        minFileSizeToInterrupt = parseInt(items["uget-min-file-size"]);
+    }
+    if (items["uget-interrupt"] !== undefined) {
+        interruptDownloads = (items["uget-interrupt"] === "true");
+    }
+
+    changeIcon();
 }
 
 /**
- * Read storage for extension specific preferences.
- * If no preferences found, initialize with default values.
+ * Initialize defaults in storage if they don't exist yet.
  */
-function readStorage() {
-    current_browser.storage.sync.get(function (items) {
-        // Read the storage for excluded keywords
-        if (items["uget-urls-exclude"]) {
-            urlsToSkip = items["uget-urls-exclude"].split(/[\s,]+/);
-        } else {
-            current_browser.storage.sync.set({ "uget-urls-exclude": '' });
-        }
-
-        // Read the storage for included keywords
-        if (items["uget-urls-include"]) {
-            urlsToInterrupt = items["uget-urls-include"].split(/[\s,]+/);
-        } else {
-            current_browser.storage.sync.set({ "uget-urls-include": '' });
-        }
-
-        if (items["uget-mime-exclude"]) {
-            mimeToSkip = items["uget-mime-exclude"].split(/[\s,]+/);
-        } else {
-            current_browser.storage.sync.set({ "uget-mime-exclude": '' });
-        }
-
-        // Read the storage for included keywords
-        if (items["uget-mime-include"]) {
-            mimeToInterrupt = items["uget-mime-include"].split(/[\s,]+/);
-        } else {
-            current_browser.storage.sync.set({ "uget-mime-include": '' });
-        }
-
-        // Read the storage for the minimum file-size to interrupt
-        if (items["uget-min-file-size"]) {
-            minFileSizeToInterrupt = parseInt(items["uget-min-file-size"]);
-        } else {
-            current_browser.storage.sync.set({ "uget-min-file-size": minFileSizeToInterrupt });
-        }
-
-        // Read the storage for enabled flag
-        if (!items["uget-interrupt"]) {
-            // Keep the value string
-            current_browser.storage.sync.set({ "uget-interrupt": 'true' });
-        } else {
-            var interrupt = (items["uget-interrupt"] == "true");
-            setInterruptDownload(interrupt);
-        }
-    });
+async function initializeDefaults() {
+    const items = await chrome.storage.sync.get(null);
+    const defaults = {};
+    if (!items["uget-urls-exclude"]) defaults["uget-urls-exclude"] = '';
+    if (!items["uget-urls-include"]) defaults["uget-urls-include"] = '';
+    if (!items["uget-mime-exclude"]) defaults["uget-mime-exclude"] = '';
+    if (!items["uget-mime-include"]) defaults["uget-mime-include"] = '';
+    if (!items["uget-min-file-size"]) defaults["uget-min-file-size"] = minFileSizeToInterrupt;
+    if (!items["uget-interrupt"]) defaults["uget-interrupt"] = 'true';
+    if (Object.keys(defaults).length > 0) {
+        await chrome.storage.sync.set(defaults);
+    }
 }
 
-/**
- * Create required context menus and set listeners.
- */
-function createContextMenus() {
-    current_browser.contextMenus.create({
+// ===================== Service Worker Startup =====================
+
+async function start() {
+    await initializeDefaults();
+    await loadState();
+    sendMessageToHost(message); // Ping uget-integrator to check connectivity
+}
+
+// Run startup
+start();
+
+// ===================== Context Menus =====================
+// Use onInstalled to create context menus (they persist across restarts)
+
+chrome.runtime.onInstalled.addListener(() => {
+    chrome.contextMenus.create({
         title: 'Download with uGet',
         id: "download_with_uget",
         contexts: ['link']
     });
 
-    current_browser.contextMenus.create({
+    chrome.contextMenus.create({
         title: 'Download all links with uGet',
         id: "download_all_links_with_uget",
         contexts: ['page']
     });
 
-    current_browser.contextMenus.create({
+    chrome.contextMenus.create({
         title: 'Download media with uGet',
         id: "download_media_with_uget",
         enabled: false,
         contexts: ['page']
     });
+});
 
-    current_browser.contextMenus.onClicked.addListener(function (info, tab) {
-        "use strict";
-        var page_url = info.pageUrl;
-        if (info.menuItemId === "download_with_uget") {
-            message.URL = info['linkUrl'];
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    "use strict";
+    const page_url = info.pageUrl;
+
+    if (info.menuItemId === "download_with_uget") {
+        message.URL = info.linkUrl;
+        message.Referer = page_url;
+        const cookiesArr = await chrome.cookies.getAll({ url: extractRootURL(page_url) });
+        parseCookiesAndSend(cookiesArr);
+
+    } else if (info.menuItemId === "download_all_links_with_uget") {
+        try {
+            const results = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['extract.js']
+            });
+            if (results && results[0] && results[0].result && results[0].result.success) {
+                message.URL = results[0].result.urls;
+                message.Referer = page_url;
+                message.Batch = true;
+                const cookiesArr = await chrome.cookies.getAll({ url: extractRootURL(page_url) });
+                parseCookiesAndSend(cookiesArr);
+            }
+        } catch (e) {
+            console.error('Failed to extract links:', e);
+        }
+
+    } else if (info.menuItemId === "download_media_with_uget") {
+        if (page_url && page_url.includes('/www.youtube.com/watch?v=')) {
+            message.URL = page_url;
             message.Referer = page_url;
-            current_browser.cookies.getAll({ 'url': extractRootURL(page_url) }, parseCookies);
-        } else if (info.menuItemId === "download_all_links_with_uget") {
-            current_browser.tabs.executeScript(null, { file: 'extract.js' }, function (results) {
-                // Do nothing
-                if (results[0].success) {
-                    message.URL = results[0].urls;
+            const cookiesArr = await chrome.cookies.getAll({ url: extractRootURL(page_url) });
+            parseCookiesAndSend(cookiesArr);
+        } else {
+            const media_set = mediasInTab[tab.id];
+            if (media_set) {
+                const urls = Array.from(media_set);
+                if (urls.length === 1) {
+                    message.URL = urls[0];
+                    message.Referer = page_url;
+                    const cookiesArr = await chrome.cookies.getAll({ url: extractRootURL(page_url) });
+                    parseCookiesAndSend(cookiesArr);
+                } else if (urls.length > 1) {
+                    message.URL = urls.join('\n');
                     message.Referer = page_url;
                     message.Batch = true;
-                    current_browser.cookies.getAll({ 'url': extractRootURL(page_url) }, parseCookies);
-                }
-            });
-        } else if (info.menuItemId === "download_media_with_uget") {
-            if (page_url.includes('/www.youtube.com/watch?v=')) {
-                // Youtube
-                message.URL = page_url;
-                message.Referer = page_url;
-                current_browser.cookies.getAll({ 'url': extractRootURL(page_url) }, parseCookies);
-            } else {
-                // Other videos
-                var media_set = mediasInTab[tab['id']];
-                if (media_set) {
-                    var urls = Array.from(media_set);
-                    var no_or_urls = urls.length;
-                    if (no_or_urls == 1) {
-                        message.URL = urls[0];
-                        message.Referer = page_url;
-                        current_browser.cookies.getAll({ 'url': extractRootURL(page_url) }, parseCookies);
-                    } else if (no_or_urls > 1) {
-                        message.URL = urls.join('\n');
-                        message.Referer = page_url;
-                        message.Batch = true;
-                        current_browser.cookies.getAll({ 'url': extractRootURL(page_url) }, parseCookies);
-                    }
+                    const cookiesArr = await chrome.cookies.getAll({ url: extractRootURL(page_url) });
+                    parseCookiesAndSend(cookiesArr);
                 }
             }
-
         }
-    });
-}
+    }
+});
 
-/**
- * Set hooks to interrupt downloads.
- */
-function setDownloadHooks() {
-    // Interrupt downloads on creation
-    current_browser.downloads.onCreated.addListener(function (downloadItem) {
+// ===================== Keyboard Shortcut =====================
 
-        if (ugetIntegratorNotFound || !interruptDownloads) { // uget-integrator not installed
-            return;
-        }
+chrome.commands.onCommand.addListener((command) => {
+    if ("toggle-interruption" === command) {
+        setInterruptDownload(!interruptDownloads, true);
+    }
+});
 
-        if ("in_progress" !== downloadItem['state'].toString().toLowerCase()) {
-            return;
-        }
+// ===================== Download Interception =====================
 
-        var fileSize = downloadItem['fileSize'];
-        var mime = downloadItem['mime'];
+// Primary interception: catch downloads as they are created
+chrome.downloads.onCreated.addListener(async (downloadItem) => {
+    if (ugetIntegratorNotFound || !interruptDownloads) {
+        return;
+    }
 
-        var url = '';
-        if (chromeVersion >= 54) {
-            url = downloadItem['finalUrl'];
-        } else {
-            url = downloadItem['url'];
-        }
-        // Do not interrupt blacklisted items
-        if (isBlackListedURL(url) || isBlackListedContent(mime)) {
-            return;
-        }
-        // Always interrupt whitelisted items
-        if (isWhiteListedURL(url) || isWhiteListedContent(mime)) {
-            fileSize = MAX_FILE_SIZE;
-        }
+    if ("in_progress" !== downloadItem.state.toString().toLowerCase()) {
+        return;
+    }
 
-        if (fileSize === -1 && hostName === 'com.ugetdm.firefox') {
-            // firefox always returns -1
-            fileSize = getFileSize(url);
-        }
+    const fileSize = downloadItem.fileSize;
+    const mime = downloadItem.mime;
+    const url = downloadItem.finalUrl || downloadItem.url;
 
-        if (fileSize < minFileSizeToInterrupt) {
-            return;
-        }
+    if (fileSize < minFileSizeToInterrupt && !(isWhiteListedURL(url) || isWhiteListedContent(mime))) {
+        return;
+    }
+    if (isBlackListedURL(url) || isBlackListedContent(mime)) {
+        return;
+    }
 
-        // Cancel the download
-        current_browser.downloads.cancel(downloadItem.id);
-        // Erase the download from list
-        current_browser.downloads.erase({
-            id: downloadItem.id
-        });
-        message.URL = url;
-        message.FileName = unescape(downloadItem['filename']).replace(/\"/g, "");
-        message.fileSize = fileSize;
-        message.Referer = downloadItem['referrer'];
-        current_browser.cookies.getAll({ 'url': extractRootURL(url) }, parseCookies);
-    });
+    // Cancel the download
+    chrome.downloads.cancel(downloadItem.id);
+    // Erase the download from list
+    chrome.downloads.erase({ id: downloadItem.id });
 
-    current_browser.webRequest.onBeforeRequest.addListener(function (details) {
-        if (details.method === 'POST') {
+    message.URL = url;
+    message.FileName = unescape(downloadItem.filename).replace(/\"/g, "");
+    message.FileSize = fileSize;
+    message.Referer = downloadItem.referrer;
+
+    const cookiesArr = await chrome.cookies.getAll({ url: extractRootURL(url) });
+    parseCookiesAndSend(cookiesArr);
+});
+
+// ===================== webRequest Observers (Non-Blocking) =====================
+
+// Observe POST data from form submissions
+chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+        if (details.method === 'POST' && details.requestBody && details.requestBody.formData) {
             message.PostData = postParams(details.requestBody.formData);
         }
-        return {
-            requestHeaders: details.requestHeaders
-        };
-    }, {
-            urls: [
-                '<all_urls>'
-            ],
-            types: [
-                'main_frame',
-                'sub_frame'
-            ]
-        }, [
-            'blocking',
-            'requestBody'
-        ]);
-    current_browser.webRequest.onBeforeSendHeaders.addListener(function (details) {
+    },
+    {
+        urls: ['<all_urls>'],
+        types: ['main_frame', 'sub_frame']
+    },
+    ['requestBody']
+);
+
+// Observe request headers to capture User-Agent, Referer, Cookies
+chrome.webRequest.onBeforeSendHeaders.addListener(
+    (details) => {
         currRequest++;
-        if (currRequest > 2)
-            currRequest = 2;
+        if (currRequest > 2) currRequest = 2;
         requestList[currRequest].id = details.requestId;
-        for (var i = 0; i < details.requestHeaders.length; ++i) {
-            if (details.requestHeaders[i].name.toLowerCase() === 'user-agent') {
+        for (let i = 0; i < details.requestHeaders.length; ++i) {
+            const name = details.requestHeaders[i].name.toLowerCase();
+            if (name === 'user-agent') {
                 message.UserAgent = details.requestHeaders[i].value;
-            } else if (details.requestHeaders[i].name.toLowerCase() === 'referer') {
+            } else if (name === 'referer') {
                 requestList[currRequest].referrer = details.requestHeaders[i].value;
-            } else if (details.requestHeaders[i].name.toLowerCase() === 'cookie') {
+            } else if (name === 'cookie') {
                 requestList[currRequest].cookies = details.requestHeaders[i].value;
             }
         }
-        return {
-            requestHeaders: details.requestHeaders
-        };
-    }, {
-            urls: [
-                '<all_urls>'
-            ],
-            types: [
-                'main_frame',
-                'sub_frame',
-                'xmlhttprequest'
-            ]
-        }, [
-            'blocking',
-            'requestHeaders'
-        ]);
-    current_browser.webRequest.onHeadersReceived.addListener(function (details) {
+    },
+    {
+        urls: ['<all_urls>'],
+        types: ['main_frame', 'sub_frame', 'xmlhttprequest']
+    },
+    ['requestHeaders']
+);
 
-
-        if (ugetIntegratorNotFound) { // uget-integrator not installed
-            return {
-                responseHeaders: details.responseHeaders
-            };
+// Observe response headers to detect downloadable content
+// In MV3 this is non-blocking — we can't redirect or cancel here.
+// Instead we set metadata so downloads.onCreated can use it.
+chrome.webRequest.onHeadersReceived.addListener(
+    async (details) => {
+        if (ugetIntegratorNotFound || !interruptDownloads) {
+            return;
         }
 
-        if (!details.statusLine.includes("200")) { // HTTP response is not OK
-            return {
-                responseHeaders: details.responseHeaders
-            };
+        // Check HTTP status code (statusLine removed in MV3)
+        if (details.statusCode !== 200) {
+            return;
         }
 
         if (isBlackListedURL(details.url)) {
-            return {
-                responseHeaders: details.responseHeaders
-            };
+            return;
         }
 
-        var interruptDownload = false;
+        let interruptDownload = false;
         message.URL = details.url;
-        var contentType = "";
+        let contentType = "";
 
-        for (var i = 0; i < details.responseHeaders.length; ++i) {
-            if (details.responseHeaders[i].name.toLowerCase() == 'content-length') {
-                message.fileSize = details.responseHeaders[i].value;
-                var fileSize = parseInt(message.fileSize);
+        for (let i = 0; i < details.responseHeaders.length; ++i) {
+            const headerName = details.responseHeaders[i].name.toLowerCase();
+
+            if (headerName === 'content-length') {
+                message.FileSize = details.responseHeaders[i].value;
+                const fileSize = parseInt(message.FileSize);
                 if (fileSize < minFileSizeToInterrupt && !isWhiteListedURL(message.URL)) {
-                    return {
-                        responseHeaders: details.responseHeaders
-                    };
+                    return;
                 }
-            } else if (details.responseHeaders[i].name.toLowerCase() == 'content-disposition') {
+            } else if (headerName === 'content-disposition') {
                 disposition = details.responseHeaders[i].value;
-                if (disposition.lastIndexOf('filename') != -1) {
-                    var found = disposition.match(/filename[^;=\n]*\*=UTF-8''((['"]).*?\2|[^;\n]*)/);
+                if (disposition.lastIndexOf('filename') !== -1) {
+                    const found = disposition.match(/filename[^;=\n]*\*=UTF-8''((['"]).*?\2|[^;\n]*)/);
                     if (found) {
                         message.FileName = decodeURI(found[1]);
                     } else {
@@ -378,163 +323,146 @@ function setDownloadHooks() {
                     }
                     interruptDownload = true;
                 }
-            } else if (details.responseHeaders[i].name.toLowerCase() == 'content-type') {
+            } else if (headerName === 'content-type') {
                 contentType = details.responseHeaders[i].value;
                 if (isBlackListedContent(contentType)) {
                     interruptDownload = false;
-                    return {
-                        responseHeaders: details.responseHeaders
-                    };
+                    return;
                 } else if (isWhiteListedContent(contentType)) {
                     interruptDownload = true;
                 } else {
-                    return {
-                        responseHeaders: details.responseHeaders
-                    };
+                    return;
                 }
             }
         }
-        if (interruptDownload && interruptDownloads) {
-            for (var i = 0; i < filter.length; i++) {
-                if (filter[i] != "" && contentType.lastIndexOf(filter[i]) != -1) {
-                    return {
-                        responseHeaders: details.responseHeaders
-                    };
+
+        if (interruptDownload) {
+            for (let i = 0; i < filter.length; i++) {
+                if (filter[i] !== "" && contentType.lastIndexOf(filter[i]) !== -1) {
+                    return;
                 }
             }
-            for (var j = 0; j < 3; j++) {
-                if (details.requestId == requestList[j].id && requestList[j].id != "") {
+            for (let j = 0; j < 3; j++) {
+                if (details.requestId === requestList[j].id && requestList[j].id !== "") {
                     message.Referer = requestList[j].referrer;
                     message.Cookies = requestList[j].cookies;
                     break;
                 }
             }
-            if (details.method != "POST") {
+            if (details.method !== "POST") {
                 message.PostData = '';
             }
-            current_browser.cookies.getAll({ 'url': extractRootURL(message.URL) }, parseCookies);
-            var scheme = /^https/.test(details.url) ? 'https' : 'http';
-            if (chromeVersion >= 35 || firefoxVersion >= 51) {
-                return {
-                    redirectUrl: "javascript:"
-                };
-            } else if (details.frameId === 0) {
-                current_browser.tabs.update(details.tabId, {
-                    url: "javascript:"
-                });
-                var responseHeaders = details.responseHeaders.filter(function (header) {
-                    var name = header.name.toLowerCase();
-                    return name !== 'content-type' &&
-                        name !== 'x-content-type-options' &&
-                        name !== 'content-disposition';
-                }).concat([{
-                    name: 'Content-Type',
-                    value: 'text/plain'
-                }, {
-                    name: 'X-Content-Type-Options',
-                    value: 'nosniff'
-                }]);
-                return {
-                    responseHeaders: responseHeaders
-                };
-            }
-            return {
-                cancel: true
-            };
+            const cookiesArr = await chrome.cookies.getAll({ url: extractRootURL(message.URL) });
+            parseCookiesAndSend(cookiesArr);
         } else {
             clearMessage();
         }
-        return {
-            responseHeaders: details.responseHeaders
-        };
-    }, {
-            urls: [
-                '<all_urls>'
-            ],
-            types: [
-                'main_frame',
-                'sub_frame'
-            ]
-        }, [
-            'responseHeaders',
-            'blocking'
-        ]);
-}
+    },
+    {
+        urls: ['<all_urls>'],
+        types: ['main_frame', 'sub_frame']
+    },
+    ['responseHeaders']
+);
 
-/**
- * Check the TAB URL and enable download_media_with_uget if the page is Youtube
- * @param {*int} tabId 
- */
+// ===================== Video Grabber =====================
+
 function checkForYoutube(tabId, disableIfNot) {
-    current_browser.tabs.get(tabId, function (tab) {
-        isYoutube = tab['url'] && tab['url'].includes('/www.youtube.com/watch?v=')
+    chrome.tabs.get(tabId, (tab) => {
+        if (chrome.runtime.lastError) return; // Tab may not exist
+        const isYoutube = tab.url && tab.url.includes('/www.youtube.com/watch?v=');
         if (isYoutube) {
-            current_browser.contextMenus.update("download_media_with_uget", { enabled: true });
+            chrome.contextMenus.update("download_media_with_uget", { enabled: true });
         } else if (disableIfNot) {
-            current_browser.contextMenus.update("download_media_with_uget", { enabled: false });
+            chrome.contextMenus.update("download_media_with_uget", { enabled: false });
         }
     });
 }
 
-/**
- * Grab videos and add them to mediasInTab.
- */
-function enableVideoGrabber() {
-    current_browser.tabs.onActivated.addListener(function (activeInfo) {
-        if (mediasInTab[activeInfo['tabId']] != undefined) {
-            // Media already detected
-            current_browser.contextMenus.update("download_media_with_uget", { enabled: true });
-        } else {
-            // Check for Youtube
-            checkForYoutube(activeInfo['tabId'], true);
-        }
-    });
+chrome.tabs.onActivated.addListener((activeInfo) => {
+    if (mediasInTab[activeInfo.tabId] !== undefined) {
+        chrome.contextMenus.update("download_media_with_uget", { enabled: true });
+    } else {
+        checkForYoutube(activeInfo.tabId, true);
+    }
+});
 
-    current_browser.tabs.onRemoved.addListener(function (tabId, removeInfo) {
-        if (mediasInTab[tabId]) {
-            delete mediasInTab[tabId];
-        }
-    });
+chrome.tabs.onRemoved.addListener((tabId) => {
+    if (mediasInTab[tabId]) {
+        delete mediasInTab[tabId];
+    }
+});
 
-    current_browser.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
-        if (changeInfo['status'] === 'loading') {
-            // Loading a new page
-            delete mediasInTab[tabId];
-        }
-        // Check for Youtube
-        checkForYoutube(tabId, false);
-    });
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status === 'loading') {
+        delete mediasInTab[tabId];
+    }
+    checkForYoutube(tabId, false);
+});
 
-    current_browser.webRequest.onResponseStarted.addListener(function (details) {
-        content_url = details['url'];
-        type = details['type'];
+chrome.webRequest.onResponseStarted.addListener(
+    (details) => {
+        const content_url = details.url;
+        const type = details.type;
         if (type === 'media' || content_url.includes('mp4')) {
-            tabId = details['tabId'];
-            mediaSet = mediasInTab[tabId];
-            if (mediaSet == undefined) {
+            const tabId = details.tabId;
+            let mediaSet = mediasInTab[tabId];
+            if (mediaSet === undefined) {
                 mediaSet = new Set();
                 mediasInTab[tabId] = mediaSet;
             }
             mediaSet.add(content_url);
-            current_browser.contextMenus.update("download_media_with_uget", { enabled: true });
+            chrome.contextMenus.update("download_media_with_uget", { enabled: true });
         }
-    }, {
-            urls: [
-                '<all_urls>'
-            ],
-            types: [
-                'media',
-                'object'
-            ]
-        });
-}
+    },
+    {
+        urls: ['<all_urls>'],
+        types: ['media', 'object']
+    }
+);
 
-////////////////// Utility Functions //////////////////
+// ===================== Message Handler (Popup ↔ Service Worker) =====================
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'getState') {
+        sendResponse({
+            state: getState(),
+            interruptDownloads: interruptDownloads,
+            ugetIntegratorVersion: ugetIntegratorVersion,
+            ugetVersion: ugetVersion
+        });
+    } else if (request.action === 'setInterruptDownload') {
+        setInterruptDownload(request.enabled, true);
+        sendResponse({ success: true });
+    } else if (request.action === 'updateExcludeKeywords') {
+        updateExcludeKeywords(request.value);
+        sendResponse({ success: true });
+    } else if (request.action === 'updateIncludeKeywords') {
+        updateIncludeKeywords(request.value);
+        sendResponse({ success: true });
+    } else if (request.action === 'updateExcludeMIMEs') {
+        updateExcludeMIMEs(request.value);
+        sendResponse({ success: true });
+    } else if (request.action === 'updateIncludeMIMEs') {
+        updateIncludeMIMEs(request.value);
+        sendResponse({ success: true });
+    } else if (request.action === 'updateMinFileSize') {
+        updateMinFileSize(request.value);
+        sendResponse({ success: true });
+    }
+    return false; // Synchronous response
+});
+
+// ===================== Utility Functions =====================
+
 /**
- * Send message to uget-integrator
+ * Send message to uget-integrator native host.
  */
-function sendMessageToHost(message) {
-    current_browser.runtime.sendNativeMessage(hostName, message, function (response) {
+function sendMessageToHost(msg) {
+    chrome.runtime.sendNativeMessage(HOST_NAME, msg, (response) => {
+        if (chrome.runtime.lastError) {
+            console.warn('Native messaging error:', chrome.runtime.lastError.message);
+        }
         clearMessage();
         ugetIntegratorNotFound = (response == null);
         if (!ugetIntegratorNotFound && !ugetIntegratorVersion) {
@@ -565,50 +493,28 @@ function clearMessage() {
     message.URL = '';
     message.Cookies = '';
     message.FileName = '';
-    message.fileSize = '';
+    message.FileSize = '';
     message.Referer = '';
     message.UserAgent = '';
     message.Batch = false;
 }
 
 /**
- * Extract the POST parameters from a form data.
+ * Extract POST parameters from form data.
  */
 function postParams(source) {
-    var array = [];
-    for (var key in source) {
+    const array = [];
+    for (const key in source) {
         array.push(encodeURIComponent(key) + '=' + encodeURIComponent(source[key]));
     }
     return array.join('&');
 }
 
 /**
- * Get the fileSize of given URL.
- * @param {string} url 
- */
-function getFileSize(url) {
-    var fileSize = -1;
-    try {
-        var http = new XMLHttpRequest();
-        http.open('HEAD', url, false);
-        http.send(null);
-        if (http.status === 200) {
-            fileSize = http.getResponseHeader('content-length');
-            if (fileSize) {
-                fileSize = parseInt(fileSize);
-            }
-        }
-    } catch (err) {
-        fileSize = -1;
-    }
-    return fileSize;
-}
-
-/**
- * Extract the root of a URL.
+ * Extract the root URL.
  */
 function extractRootURL(url) {
-    var domain;
+    let domain;
     if (url.indexOf("://") > -1) {
         domain = url.split('/')[0] + '/' + url.split('/')[1] + '/' + url.split('/')[2];
     } else {
@@ -618,27 +524,26 @@ function extractRootURL(url) {
 }
 
 /**
- * Parse the cookies and send the message to the native host.
+ * Parse cookies and send the message to the native host.
  */
-function parseCookies(cookies_arr) {
-    cookies = '';
-    for (var i in cookies_arr) {
-        cookies += cookies_arr[i].domain + '\t';
-        cookies += (cookies_arr[i].httpOnly ? "FALSE" : "TRUE") + '\t';
-        cookies += cookies_arr[i].path + '\t';
-        cookies += (cookies_arr[i].secure ? "TRUE" : "FALSE") + '\t';
-        cookies += Math.round(cookies_arr[i].expirationDate) + '\t';
-        cookies += cookies_arr[i].name + '\t';
-        cookies += cookies_arr[i].value;
-        cookies += '\n';
+function parseCookiesAndSend(cookies_arr) {
+    let cookieStr = '';
+    for (const cookie of cookies_arr) {
+        cookieStr += cookie.domain + '\t';
+        cookieStr += (cookie.httpOnly ? "FALSE" : "TRUE") + '\t';
+        cookieStr += cookie.path + '\t';
+        cookieStr += (cookie.secure ? "TRUE" : "FALSE") + '\t';
+        cookieStr += Math.round(cookie.expirationDate) + '\t';
+        cookieStr += cookie.name + '\t';
+        cookieStr += cookie.value;
+        cookieStr += '\n';
     }
-    message.Cookies = cookies;
+    message.Cookies = cookieStr;
     sendMessageToHost(message);
 }
 
 /**
  * Update the exclude keywords.
- * Is called from the popup.js.
  */
 function updateExcludeKeywords(exclude) {
     if (exclude === "") {
@@ -646,12 +551,11 @@ function updateExcludeKeywords(exclude) {
     } else {
         urlsToSkip = exclude.split(/[\s,]+/);
     }
-    current_browser.storage.sync.set({ "uget-urls-exclude": exclude });
+    chrome.storage.sync.set({ "uget-urls-exclude": exclude });
 }
 
 /**
  * Update the include keywords.
- * Is called from the popup.js.
  */
 function updateIncludeKeywords(include) {
     if (include === "") {
@@ -659,12 +563,11 @@ function updateIncludeKeywords(include) {
     } else {
         urlsToInterrupt = include.split(/[\s,]+/);
     }
-    current_browser.storage.sync.set({ "uget-urls-include": include });
+    chrome.storage.sync.set({ "uget-urls-include": include });
 }
 
 /**
  * Update the exclude MIMEs.
- * Is called from the popup.js.
  */
 function updateExcludeMIMEs(exclude) {
     if (exclude === "") {
@@ -672,12 +575,11 @@ function updateExcludeMIMEs(exclude) {
     } else {
         mimeToSkip = exclude.split(/[\s,]+/);
     }
-    current_browser.storage.sync.set({ "uget-mime-exclude": exclude });
+    chrome.storage.sync.set({ "uget-mime-exclude": exclude });
 }
 
 /**
  * Update the include MIMEs.
- * Is called from the popup.js.
  */
 function updateIncludeMIMEs(include) {
     if (include === "") {
@@ -685,32 +587,28 @@ function updateIncludeMIMEs(include) {
     } else {
         mimeToInterrupt = include.split(/[\s,]+/);
     }
-    current_browser.storage.sync.set({ "uget-mime-include": include });
+    chrome.storage.sync.set({ "uget-mime-include": include });
 }
 
 /**
  * Update the minimum file size to interrupt.
- * Is called from the popup.js.
  */
 function updateMinFileSize(size) {
     minFileSizeToInterrupt = size;
-    current_browser.storage.sync.set({ "uget-min-file-size": size });
+    chrome.storage.sync.set({ "uget-min-file-size": size });
 }
 
 /**
- * Check whether not to interrupt the given url.
+ * Check whether not to interrupt the given URL.
  */
 function isBlackListedURL(url) {
-    if (!url) {
-        return true;
-    }
-    blackListed = false;
-    // Test the URL
-    if (url.includes("//docs.google.com/") || url.includes("googleusercontent.com/docs")) { // Cannot download from Google Docs
+    if (!url) return true;
+    let blackListed = false;
+    if (url.includes("//docs.google.com/") || url.includes("googleusercontent.com/docs")) {
         blackListed = true;
     }
-    for (var keyword of urlsToSkip) {
-        if (url.includes(keyword)) {
+    for (const keyword of urlsToSkip) {
+        if (keyword && url.includes(keyword)) {
             blackListed = true;
             break;
         }
@@ -719,17 +617,16 @@ function isBlackListedURL(url) {
 }
 
 /**
- * Check whether not to interrupt the given url.
+ * Check whether not to interrupt the given content type.
  */
 function isBlackListedContent(contentType) {
-    blackListed = false;
-    // Test the content type
+    let blackListed = false;
     if (contentType) {
         if (/\b(?:xml|rss|javascript|json|html|text)\b/.test(contentType)) {
             blackListed = true;
         } else {
-            for (var keyword of mimeToSkip) {
-                if (contentType.includes(keyword)) {
+            for (const keyword of mimeToSkip) {
+                if (keyword && contentType.includes(keyword)) {
                     blackListed = true;
                     break;
                 }
@@ -740,19 +637,16 @@ function isBlackListedContent(contentType) {
 }
 
 /**
- * Check whether to interrupt the given url or not.
+ * Check whether to interrupt the given URL.
  */
 function isWhiteListedURL(url) {
-    if (!url) {
-        return false;
-    }
-    whiteListed = false;
-    // Test the URL
+    if (!url) return false;
+    let whiteListed = false;
     if (url.includes("video")) {
         whiteListed = true;
     }
-    for (var keyword of urlsToInterrupt) {
-        if (url.includes(keyword)) {
+    for (const keyword of urlsToInterrupt) {
+        if (keyword && url.includes(keyword)) {
             whiteListed = true;
             break;
         }
@@ -761,33 +655,28 @@ function isWhiteListedURL(url) {
 }
 
 /**
- * Check whether to interrupt the given content or not.
+ * Check whether to interrupt the given content type.
  */
 function isWhiteListedContent(contentType) {
-    whiteListed = false;
-    // Test the content type
+    let whiteListed = false;
     if (contentType) {
-        // if (/\b(?:application\/|video\/|audio\/)\b/.test(contentType)) {
-        //     whiteListed = true;
-        // } else {
-        for (var keyword of mimeToInterrupt) {
-            if (contentType.includes(keyword)) {
+        for (const keyword of mimeToInterrupt) {
+            if (keyword && contentType.includes(keyword)) {
                 whiteListed = true;
                 break;
             }
         }
-        // }
     }
     return whiteListed;
 }
 
 /**
- * Enable/Disable the plugin and update the plugin icon based on the state.
+ * Enable/Disable the plugin and update the icon.
  */
 function setInterruptDownload(interrupt, writeToStorage) {
     interruptDownloads = interrupt;
     if (writeToStorage) {
-        current_browser.storage.sync.set({ "uget-interrupt": interrupt.toString() });
+        chrome.storage.sync.set({ "uget-interrupt": interrupt.toString() });
     }
     changeIcon();
 }
@@ -796,20 +685,14 @@ function setInterruptDownload(interrupt, writeToStorage) {
  * Change extension icon based on current state.
  */
 function changeIcon() {
-    state = getState();
-    iconPath = "./icon_32.png";
-    if (state == 0 && !interruptDownloads) {
+    const state = getState();
+    let iconPath = "./icon_32.png";
+    if (state === 0 && !interruptDownloads) {
         iconPath = "./icon_disabled_32.png";
-    } else if (state == 1) {
-        // Warning
+    } else if (state === 1) {
         iconPath = "./icon_warning_32.png";
-    } else if (state == 2) {
-        // Error
+    } else if (state === 2) {
         iconPath = "./icon_error_32.png";
     }
-    current_browser.browserAction.setIcon({
-        path: iconPath
-    });
+    chrome.action.setIcon({ path: iconPath });
 }
-
-start();

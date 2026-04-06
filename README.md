@@ -1,42 +1,63 @@
-# uGet Extension
+# uGet Integration
 
-Integrate uGet Download Manager with Google Chrome, Chromium, Opera, Vivaldi and Mozilla Firefox.
+An unofficial fork of the [uGet Extension](https://github.com/ugetdm/uget-extension) by [Gobinath (ugetdm)](https://github.com/ugetdm).
 
-## Features
+This extension integrates [uGet Download Manager](http://ugetdm.com/) with Google Chrome, Chromium, and other Chromium-based browsers.
 
-> Click on each link to see GIF animation explaining how to use these features.
+The original **uGet Extension** was built for Manifest V2, which is now [deprecated by Google Chrome](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3).
 
-- [Browser Integration](https://github.com/ugetdm/uget-integrator/wiki/Features#browser-integration)
-- [Skip uGet](https://github.com/ugetdm/uget-integrator/wiki/Features#skip-uget)
-- [Download Youtube Videos](https://github.com/ugetdm/uget-integrator/wiki/Features#download-youtube-videos)
-- [Filter URLs](https://github.com/ugetdm/uget-integrator/wiki/Features#filter-urls)
-- [Batch Download](https://github.com/ugetdm/uget-integrator/wiki/Features#batch-download)
-- [Download Videos (Experimental)](https://github.com/ugetdm/uget-integrator/wiki/Features#download-videos-experimental)
+This fork migrates the extension to **Manifest V3** so that it continues to work on the latest versions of Chrome and Chromium-based browsers.
+
+## Prerequisites
+
+This extension requires **[uget-integrator](https://github.com/ugetdm/uget-integrator)** to be installed on your system. The integrator bridges the browser extension with the uGet Download Manager application.
+
+### Install uget-integrator
+
+- [Arch Linux](https://github.com/ugetdm/uget-integrator/wiki/Installation#arch)
+- [Ubuntu &amp; Linux Mint](https://github.com/ugetdm/uget-integrator/wiki/Installation#ubuntu--linux-mint)
+- [Other Linux](https://github.com/ugetdm/uget-integrator/wiki/Installation#other-linux)
+- [Windows (Recommended)](https://github.com/ugetdm/uget-integrator/wiki/Installation#recommended-method)
+- [Windows (Portable)](https://github.com/ugetdm/uget-integrator/wiki/Installation#portable-method)
 
 ## Installation
 
-> If you already have `uget-chrome-wrapper`, please uninstall it. Complete uninstallation guide is available at: [Remove Uget Chrome Wrapper](https://github.com/ugetdm/uget-integrator/wiki/Remove-Uget-Chrome-Wrapper)
+### From Source (Developer Mode)
 
-1. Install `uget-integrator`
-    - [Arch Linux](https://github.com/ugetdm/uget-integrator/wiki/Installation#arch)
-    - [Ubuntu & Linux Mint](https://github.com/ugetdm/uget-integrator/wiki/Installation#ubuntu--linux-mint)
-    - [Other Linux](https://github.com/ugetdm/uget-integrator/wiki/Installation#other-linux)
-    - [Windows (Recommended method)](https://github.com/ugetdm/uget-integrator/wiki/Installation#recommended-method)
-    - [Windows (Portable method)](https://github.com/ugetdm/uget-integrator/wiki/Installation#portable-method)
+1. Clone this repository:
 
-2. Install `uget-extension` and restart your browser
-    - [Google Chrome, Chromium & Vivaldi](https://chrome.google.com/webstore/detail/uget-integration/efjgjleilhflffpbnkaofpmdnajdpepi)
-    - [Mozilla Firefox](https://addons.mozilla.org/en-US/firefox/addon/ugetintegration/)
-    - [Opera](https://addons.opera.com/en/extensions/details/uget-integration)
+   ```bash
+   git clone https://github.com/mhatrevrushab/uget-chrome-extension.git
+   ```
+2. Open `chrome://extensions/` in Chrome.
+3. Enable **Developer mode** (toggle in the top-right corner).
+4. Click **Load unpacked** and select the `extension/` directory from the cloned repo.
 
-## Known Issues
+## Features
 
-- [Firefox not interrupting downloads](https://github.com/ugetdm/uget-integrator/wiki/Known-Issues#firefox-not-interrupting-downloads)
+> See the [uget-integrator wiki](https://github.com/ugetdm/uget-integrator/wiki/Features) for detailed feature documentation with GIF demos.
 
-## Issues
+- **Browser Integration** — Automatically intercept downloads and send them to uGet.
+- **Skip uGet** — Hold a key or configure URL patterns to bypass uGet for specific downloads.
+- **Download YouTube Videos** — Right-click to download YouTube videos via uGet.
+- **Filter URLs** — Include/exclude URL patterns for download interception.
+- **Batch Download** — Download all links on a page at once.
+- **Download Videos (Experimental)** — Detect and download embedded media.
 
-In order to prevent having the same issue reported on both uget-extension and uget-integration, this repository does not permit reporting issues anymore. Please report your issues at [uget-integrator repository](https://github.com/ugetdm/uget-integrator/issues)
+## Credits
+
+This project is a fork of [uget-extension](https://github.com/ugetdm/uget-extension) by [Gobinath](https://github.com/slgobinath), originally developed under the [ugetdm](https://github.com/ugetdm) organization. All credit for the original design and implementation goes to the authors.
 
 ## License
 
-GNU General Public License v3
+This project is licensed under the [GNU General Public License v3.0](LICENSE), the same license as the original project.
+
+```
+Copyright (C) 2016  Gobinath
+Copyright (C) 2026  Shravan (Manifest V3 migration)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+```
